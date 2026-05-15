@@ -640,6 +640,54 @@ SCRIPT
     assert_contains "$workspace/output.log" "v22.22.2"
 }
 
+test_better_sqlite3_electron_42_source_patch() {
+    info "Checking better-sqlite3 Electron 42 source patch"
+    local workspace="$TMP_DIR/better-sqlite3-electron-42"
+    local module_dir="$workspace/node_modules/better-sqlite3"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$module_dir/src/util"
+    cat > "$module_dir/src/better_sqlite3.cpp" <<'CPP'
+void init(v8::Isolate* isolate, Addon* addon) {
+	v8::Local<v8::External> data = v8::External::New(isolate, addon);
+}
+CPP
+    cat > "$module_dir/src/util/macros.cpp" <<'CPP'
+#define EasyIsolate v8::Isolate* isolate = v8::Isolate::GetCurrent()
+#define OnlyIsolate info.GetIsolate()
+#define OnlyContext isolate->GetCurrentContext()
+#define OnlyAddon static_cast<Addon*>(info.Data().As<v8::External>()->Value())
+CPP
+    cat > "$module_dir/src/util/helpers.cpp" <<'CPP'
+void SetPrototypeGetter() {
+	recv->InstanceTemplate()->SetNativeDataProperty(
+		InternalizedFromLatin1(isolate, name),
+		func,
+		0,
+		data
+	);
+}
+CPP
+
+    (
+        ELECTRON_VERSION="42.0.1"
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/native-modules.sh"
+        patch_better_sqlite3_for_v8_external_pointer_api "$module_dir"
+        patch_better_sqlite3_for_v8_external_pointer_api "$module_dir"
+    ) > "$output_log" 2>&1
+
+    assert_contains "$module_dir/src/better_sqlite3.cpp" "BETTER_SQLITE3_EXTERNAL_NEW(isolate, addon)"
+    assert_contains "$module_dir/src/util/macros.cpp" "BETTER_SQLITE3_EXTERNAL_POINTER_TAG"
+    assert_contains "$module_dir/src/util/macros.cpp" "BETTER_SQLITE3_EXTERNAL_VALUE(info.Data().As<v8::External>())"
+    assert_contains "$module_dir/src/util/helpers.cpp" "nullptr"
+    assert_contains "$output_log" "Patched better-sqlite3 source for V8 external pointer API"
+    assert_contains "$output_log" "already applied"
+}
+
 test_launcher_template_sanity() {
     info "Checking launcher template markers"
     assert_contains "$REPO_DIR/install.sh" 'DEFAULT_CODEX_WEBVIEW_PORT=5175'
@@ -650,6 +698,7 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/scripts/lib/rebuild-report.sh" "write_rebuild_report_json"
     assert_contains "$REPO_DIR/install.sh" "MIN_BETTER_SQLITE3_VERSION_FOR_ELECTRON_41=\"12.9.0\""
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "better_sqlite3_build_version"
+    assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "patch_better_sqlite3_for_v8_external_pointer_api"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "prune_native_module_build_artifacts"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" 'find "$build_dir" -type f ! -name'
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" 'find "$module_dir" -type f -name'
@@ -2460,6 +2509,7 @@ main() {
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata
     test_managed_node_runtime_source_install
+    test_better_sqlite3_electron_42_source_patch
     test_browser_use_node_repl_fallback_runtime
     test_browser_use_node_repl_glibc_pidfd_patch_static
     test_browser_use_node_repl_ldd_output_compatibility
