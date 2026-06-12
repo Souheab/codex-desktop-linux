@@ -1008,8 +1008,101 @@ function detectLatestComposerFooterControls(source) {
     footerControlsNeedle:
       `FooterInlineControls,{gap:\`normal\`,children:[${firstChildVar},${secondChildVar}]}`,
     footerControlsPatch:
-      `FooterInlineControls,{gap:\`normal\`,children:[${firstChildVar},${conversationIdVar}==null?null:(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:${conversationIdVar}}),${secondChildVar}]}`,
+      `FooterInlineControls,{gap:\`normal\`,children:[${firstChildVar},(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:${conversationIdVar}}),${secondChildVar}]}`,
   };
+}
+
+function detectCurrentComposerExternalFooterGroup(source) {
+  const groupRegex =
+    /let ([A-Za-z_$][\w$]*)=I===`home`\?([A-Za-z_$][\w$]*):([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)=V\?\.type===`cloud`\?([A-Za-z_$][\w$]*):null,([A-Za-z_$][\w$]*)=I===`home`\?\3:\2,([A-Za-z_$][\w$]*);t\[(\d+)\]!==\1\|\|t\[(\d+)\]!==\4\|\|t\[(\d+)\]!==\6\?\(\7=\(0,([A-Za-z_$][\w$]*)\.jsxs\)\(`div`,\{className:`flex min-w-0 flex-1 flex-nowrap items-center gap-1`,children:\[\1,\4,\6\]\}\),t\[\8\]=\1,t\[\9\]=\4,t\[\10\]=\6,t\[(\d+)\]=\7\):\7=t\[(\d+)\]/;
+  const match = source.match(groupRegex);
+  if (match == null || match.index == null) {
+    return null;
+  }
+
+  const [
+    needle,
+    firstChildVar,
+    homeChildVar,
+    defaultChildVar,
+    secondChildVar,
+    cloudChildVar,
+    thirdChildVar,
+    groupVar,
+    firstCacheIndex,
+    secondCacheIndex,
+    thirdCacheIndex,
+    jsxAlias,
+    groupCacheSetIndex,
+    groupCacheReadIndex,
+  ] = match;
+  if (
+    firstCacheIndex == null ||
+    secondCacheIndex == null ||
+    thirdCacheIndex == null
+  ) {
+    return null;
+  }
+  if (groupCacheSetIndex !== groupCacheReadIndex) {
+    return null;
+  }
+  const functionStart = source.lastIndexOf("function ", match.index);
+  if (functionStart === -1) {
+    return null;
+  }
+  const functionName = source.slice(functionStart).match(/^function ([A-Za-z_$][\w$]*)\(e\)\{/)?.[1];
+  if (functionName == null) {
+    return null;
+  }
+  const conversationIdVar = detectComposerFooterConversationIdVar(source, needle);
+  if (conversationIdVar == null) {
+    return null;
+  }
+
+  return {
+    needle,
+    patch:
+      `let ${firstChildVar}=I===\`home\`?${homeChildVar}:${defaultChildVar},${secondChildVar}=V?.type===\`cloud\`?${cloudChildVar}:null,${thirdChildVar}=I===\`home\`?${defaultChildVar}:${homeChildVar},${groupVar};${groupVar}=(0,${jsxAlias}.jsxs)(\`div\`,{className:\`flex min-w-0 flex-1 flex-nowrap items-center gap-1\`,children:[${firstChildVar},(0,${jsxAlias}.jsx)(codexLinuxRateLimitFooter,{conversationId:${conversationIdVar}}),${secondChildVar},${thirdChildVar}]})`,
+    insertionNeedle: `function ${functionName}(e){`,
+    jsxAlias,
+  };
+}
+
+function patchComposerFooterInlineControlsComponent(source) {
+  const markerMatch = source.match(/FooterInlineControls:([A-Za-z_$][\w$]*)/);
+  const functionName = markerMatch?.[1] ?? null;
+  if (functionName == null) {
+    return source;
+  }
+
+  const functionNeedle = `function ${functionName}(e){`;
+  const functionStart = source.indexOf(functionNeedle);
+  if (functionStart === -1) {
+    return source;
+  }
+  const openingBrace = functionStart + functionNeedle.length - 1;
+  const closingBrace = findMatchingBrace(source, openingBrace);
+  if (closingBrace === -1) {
+    return source;
+  }
+
+  const functionSource = source.slice(functionStart, closingBrace + 1);
+  if (functionSource.includes("codexLinuxRateLimitFooter")) {
+    return source;
+  }
+
+  const tailRegex =
+    /let ([A-Za-z_$][\w$]*);return t\[2\]!==([A-Za-z_$][\w$]*)\|\|t\[3\]!==([A-Za-z_$][\w$]*)\|\|t\[4\]!==([A-Za-z_$][\w$]*)\?\(\1=\(0,([A-Za-z_$][\w$]*)\.jsx\)\(`div`,\{ref:\3,className:\4,children:\2\}\),t\[2\]=\2,t\[3\]=\3,t\[4\]=\4,t\[5\]=\1\):\1=t\[5\],\1\}$/;
+  const patchedFunctionSource = functionSource.replace(
+    tailRegex,
+    "let $1;return $1=(0,$5.jsxs)(`div`,{ref:$3,className:$4,children:[$2,(0,$5.jsx)(codexLinuxRateLimitFooter,{conversationId:null})]}),$1}",
+  );
+
+  if (patchedFunctionSource === functionSource) {
+    return source;
+  }
+
+  return source.slice(0, functionStart) + patchedFunctionSource + source.slice(closingBrace + 1);
 }
 
 function detectCurrentPermissionsRateLimitFooterSymbols(source) {
@@ -1047,6 +1140,7 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
   let patchedSource = currentSource;
   const currentSymbols = detectCurrentRateLimitFooterSymbols(currentSource);
   const latestFooterControls = detectLatestComposerFooterControls(currentSource);
+  const currentExternalFooterGroup = detectCurrentComposerExternalFooterGroup(currentSource);
   const currentPermissionsFooterSymbols = detectCurrentPermissionsRateLimitFooterSymbols(currentSource);
   const currentComposerStatusNeedle =
     "function zg(e){";
@@ -1065,6 +1159,7 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
     currentSource.includes("(0,Q.jsx)(nz,{conversationId:f,hostId:C,cwdOverride:w})") ||
     currentPermissionsControlsNeedle.test(currentSource) ||
     latestFooterControls != null ||
+    currentExternalFooterGroup != null ||
     (currentSource.includes(currentComposerStatusNeedle) &&
       currentSource.includes(currentComposerFooterCallNeedle));
   const homeFooterGroupNeedle =
@@ -1094,6 +1189,15 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
     ? null
     : `function codexLinuxRateLimitFooter({conversationId:e}){try{let t=(0,Z.c)(22),{activeMode:n}=Bi(e),r=n?.settings.model??null,{data:i}=ci(${currentSymbols.accountSignalVar}),a=i===void 0?null:i,o=Ro(a),s=Zo(a),c=Xo(Jo(o,{activeLimitName:s,selectedModel:r})).slice(0,2);c.length===0&&(c=Xo(Jo(o,{activeLimitName:s,selectedModel:null})).slice(0,2));if(c.length===0)return null;let l;t[0]===Symbol.for(\`react.memo_cache_sentinel\`)?(l=(0,Q.jsx)(X,{id:\`composer.linuxRateLimitFooter.tooltip\`,defaultMessage:\`Rate limits remaining\`,description:\`Tooltip for compact footer rate limit status\`}),t[0]=l):l=t[0];let u;if(t[1]!==c){u=c.map((e,t)=>{let n=No(e.bucket.usedPercent??0);return(0,Q.jsxs)(\`span\`,{className:\`flex items-center gap-1 whitespace-nowrap\`,children:[t>0?(0,Q.jsx)(\`span\`,{className:\`text-token-input-placeholder-foreground\`,children:\`/\`}):null,(0,Q.jsx)(\`span\`,{children:(0,Q.jsx)(${currentSymbols.durationComponent},{minutes:e.bucket.windowDurationMins,variant:\`summary\`})}),(0,Q.jsx)(\`span\`,{className:\`font-medium text-token-text-primary\`,children:Do(n)})]},e.key)}),t[1]=c,t[2]=u}else u=t[2];let d;t[3]!==u?(d=(0,Q.jsx)(\`span\`,{className:\`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10\`,children:u}),t[3]=u,t[4]=d):d=t[4];let f;return t[5]!==l||t[6]!==d?(f=(0,Q.jsx)(nc,{tooltipContent:l,children:d}),t[5]=l,t[6]=d,t[7]=f):f=t[7],f}catch(e){return null}}`;
   const latestFooterFunction =
+    "function codexLinuxRateLimitFooter({conversationId:e}){try{let t=(0,$.c)(8),{activeMode:n}=or(e),r=n?.settings.model??null,{data:i}=St(ue),a=ma(i),o=la(i),s=da(a,{activeLimitName:o,selectedModel:r}).filter(og).slice(0,2);s.length===0&&(s=da(a,{activeLimitName:o,selectedModel:null}).filter(og).slice(0,2));if(s.length===0)return(0,Q.jsx)(`span`,{className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10`,children:`Usage limits`});let c=ht(),l;if(t[0]!==s||t[1]!==c){l=s.map(e=>`${Xh(e.bucket.windowDurationMins??null,c)} ${c.formatNumber(Sa(e.bucket.usedPercent??0),{maximumFractionDigits:0})}%`).join(` / `),t[0]=s,t[1]=c,t[2]=l}else l=t[2];let u;return t[3]!==l?(u=(0,Q.jsx)(`span`,{className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10`,children:l}),t[3]=l,t[4]=u):u=t[4],u}catch(e){return(0,Q.jsx)(`span`,{className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10`,children:`Usage limits`})}}";
+  const previousLatestFooterFunctionWithVisibleFallback =
+    "function codexLinuxRateLimitFooter({conversationId:e}){try{let t=(0,$.c)(8),{activeMode:n}=or(e),r=n?.settings.model??null,{data:i}=St(ue),a=ma(i),o=la(i),s=da(a,{activeLimitName:o,selectedModel:r}).filter(og).slice(0,2);s.length===0&&(s=da(a,{activeLimitName:o,selectedModel:null}).filter(og).slice(0,2));if(s.length===0)return(0,Q.jsx)(`span`,{className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10`,children:`Usage limits`});let c=ht(),l;if(t[0]!==s||t[1]!==c){l=s.map(e=>`${Xh(e.bucket.windowDurationMins??null,c)} ${c.formatNumber(Sa(e.bucket.usedPercent??0),{maximumFractionDigits:0})}%`).join(` / `),t[0]=s,t[1]=c,t[2]=l}else l=t[2];let u;return t[3]!==l?(u=(0,Q.jsx)(`span`,{className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10`,children:l}),t[3]=l,t[4]=u):u=t[4],u}catch(e){return null}}";
+  const currentExternalFooterFunction = currentExternalFooterGroup == null
+    ? null
+    : `function codexLinuxRateLimitFooter(){try{return(0,${currentExternalFooterGroup.jsxAlias}.jsx)(\`span\`,{className:\`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10\`,children:\`Usage limits\`})}catch(e){return null}}`;
+  const previousLatestFooterFunctionWithModelFallback =
+    "function codexLinuxRateLimitFooter({conversationId:e}){try{let t=(0,$.c)(8),{activeMode:n}=or(e),r=n?.settings.model??null,{data:i}=St(ue),a=ma(i),o=la(i),s=da(a,{activeLimitName:o,selectedModel:r}).filter(og).slice(0,2);s.length===0&&(s=da(a,{activeLimitName:o,selectedModel:null}).filter(og).slice(0,2));if(s.length===0)return null;let c=ht(),l;if(t[0]!==s||t[1]!==c){l=s.map(e=>`${Xh(e.bucket.windowDurationMins??null,c)} ${c.formatNumber(Sa(e.bucket.usedPercent??0),{maximumFractionDigits:0})}%`).join(` / `),t[0]=s,t[1]=c,t[2]=l}else l=t[2];let u;return t[3]!==l?(u=(0,Q.jsx)(`span`,{className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10`,children:l}),t[3]=l,t[4]=u):u=t[4],u}catch(e){return null}}";
+  const previousLatestFooterFunction =
     "function codexLinuxRateLimitFooter({conversationId:e}){try{let t=(0,$.c)(8),{activeMode:n}=or(e),r=n?.settings.model??null,{data:i}=St(ue),a=ma(i),o=la(i),s=da(a,{activeLimitName:o,selectedModel:r}).filter(og).slice(0,2);if(s.length===0)return null;let c=ht(),l;if(t[0]!==s||t[1]!==c){l=s.map(e=>`${Xh(e.bucket.windowDurationMins??null,c)} ${c.formatNumber(Sa(e.bucket.usedPercent??0),{maximumFractionDigits:0})}%`).join(` / `),t[0]=s,t[1]=c,t[2]=l}else l=t[2];let u;return t[3]!==l?(u=(0,Q.jsx)(`span`,{className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10`,children:l}),t[3]=l,t[4]=u):u=t[4],u}catch(e){return null}}";
   const currentPermissionsFooterFunction = currentPermissionsFooterSymbols == null
     ? null
@@ -1105,6 +1209,11 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
       patchedSource = patchedSource.replace(
         latestFooterControls.insertionNeedle,
         `${latestFooterFunction}${latestFooterControls.insertionNeedle}`,
+      );
+    } else if (currentExternalFooterGroup != null && currentExternalFooterFunction != null) {
+      patchedSource = patchedSource.replace(
+        currentExternalFooterGroup.insertionNeedle,
+        `${currentExternalFooterFunction}${currentExternalFooterGroup.insertionNeedle}`,
       );
     } else if (currentSymbols != null && currentFooterFunction != null) {
       patchedSource = patchedSource.replace(
@@ -1162,6 +1271,21 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
     return currentSource;
   }
 
+  if (patchedSource.includes(previousLatestFooterFunction)) {
+    patchedSource = patchedSource.replace(previousLatestFooterFunction, latestFooterFunction);
+  }
+  if (patchedSource.includes(previousLatestFooterFunctionWithModelFallback)) {
+    patchedSource = patchedSource.replace(previousLatestFooterFunctionWithModelFallback, latestFooterFunction);
+  }
+  if (patchedSource.includes(previousLatestFooterFunctionWithVisibleFallback)) {
+    patchedSource = patchedSource.replace(previousLatestFooterFunctionWithVisibleFallback, latestFooterFunction);
+  }
+
+  patchedSource = patchedSource.replace(
+    /([A-Za-z_$][\w$]*)==null\?null:\(0,Q\.jsx\)\(codexLinuxRateLimitFooter,\{conversationId:\1\}\)/g,
+    "(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:$1})",
+  );
+
   if (
     latestFooterControls != null &&
     !patchedSource.includes(`codexLinuxRateLimitFooter,{conversationId:${latestFooterControls.conversationIdVar}}`) &&
@@ -1170,6 +1294,15 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
     patchedSource = patchedSource.replace(
       latestFooterControls.footerControlsNeedle,
       latestFooterControls.footerControlsPatch,
+    );
+  }
+
+  patchedSource = patchComposerFooterInlineControlsComponent(patchedSource);
+
+  if (currentExternalFooterGroup != null && patchedSource.includes(currentExternalFooterGroup.needle)) {
+    patchedSource = patchedSource.replace(
+      currentExternalFooterGroup.needle,
+      currentExternalFooterGroup.patch,
     );
   }
 
@@ -1225,14 +1358,14 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
   const permissionsControlsNeedle =
     "(0,Q.jsx)(nz,{conversationId:f,hostId:C,cwdOverride:w}),(0,Q.jsx)(vz,{conversationId:f,hasGoal:y,isGoalActionAvailable:b,onClearGoal:x,showDivider:!0})";
   const permissionsControlsPatch =
-    "(0,Q.jsx)(nz,{conversationId:f,hostId:C,cwdOverride:w}),f==null?null:(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:f}),(0,Q.jsx)(vz,{conversationId:f,hasGoal:y,isGoalActionAvailable:b,onClearGoal:x,showDivider:!0})";
+    "(0,Q.jsx)(nz,{conversationId:f,hostId:C,cwdOverride:w}),(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:f}),(0,Q.jsx)(vz,{conversationId:f,hasGoal:y,isGoalActionAvailable:b,onClearGoal:x,showDivider:!0})";
   if (patchedSource.includes(permissionsControlsNeedle)) {
     patchedSource = patchedSource.replace(permissionsControlsNeedle, permissionsControlsPatch);
   }
   if (currentPermissionsControlsNeedle.test(patchedSource)) {
     patchedSource = patchedSource.replace(
       currentPermissionsControlsNeedle,
-      "(0,Q.jsx)($1,{conversationId:f,hostId:C,cwdOverride:w}),f==null?null:(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:f}),(0,Q.jsx)($2,{conversationId:f,hasGoal:y,isGoalActionAvailable:b,onClearGoal:x,showDivider:!0})",
+      "(0,Q.jsx)($1,{conversationId:f,hostId:C,cwdOverride:w}),(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:f}),(0,Q.jsx)($2,{conversationId:f,hasGoal:y,isGoalActionAvailable:b,onClearGoal:x,showDivider:!0})",
     );
   }
 
